@@ -36,15 +36,13 @@ def tmy(lat: float, lon: float):
     if df.index.tz is None:
         df = df.tz_localize("UTC")
 
-    # 3) 使用 Sydney 时区（Australia/Sydney，DST-aware）
-    from zoneinfo import ZoneInfo
-    tz_sydney = ZoneInfo("Australia/Sydney")  # 会自动处理夏令时
-
+    # 3) 将时区固定为 UTC+10（Etc/GMT-10 是 UTC+10 的表示；注意符号与直观的 +/- 相反）
+    tz_utc_plus_10 = ZoneInfo("Etc/GMT-10")  # UTC+10
     try:
-        df = df.tz_convert(tz_sydney)
-        tz_used = tz_sydney
+        df = df.tz_convert(tz_utc_plus_10)
+        tz_used = tz_utc_plus_10
     except Exception:
-        # 回退保护：无法转换时使用 UTC
+        # 如果转换失败，回退到 UTC
         df = df.tz_convert("UTC")
         tz_used = ZoneInfo("UTC")
 

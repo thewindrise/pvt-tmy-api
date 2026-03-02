@@ -7,6 +7,8 @@ import pandas as pd
 from timezonefinder import TimezoneFinder
 from zoneinfo import ZoneInfo
 
+_tf = TimezoneFinder()
+
 app = FastAPI()
 
 app.add_middleware(
@@ -16,7 +18,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-tf = TimezoneFinder()
+_tf = TimezoneFinder()
 
 # -------------- 方案 A：DST-aware 的 Sydney 时区 (Australia/Sydney) --------------
 def fnum(x) -> float:
@@ -36,23 +38,31 @@ def tmy(lat: float, lon: float):
     if df.index.tz is None:
         df = df.tz_localize("UTC")
 
-    # 3) 将时区固定为 UTC+10（Etc/GMT-10 是 UTC+10 的表示；注意符号与直观的 +/- 相反）
-    tz_utc_plus_10 = ZoneInfo("Etc/GMT-10")  # UTC+10
+    # 3) 根据坐标判定时区
+    tz_name = _tf.timezone_at(lng=lon, lat=lat)
+    if tz_name is None:
+        # 无法定位时区，回退到 UTC
+        tz_used = ZoneInfo("UTC")
+        tz_used_name = "UTC"
+    else:
+        tz_used = ZoneInfo(tz_name)
+        tz_used_name = tz_name
+
+    # 4) 将时间转换到确定的本地时区
     try:
-        df = df.tz_convert(tz_utc_plus_10)
-        tz_used = tz_utc_plus_10
+        df = df.tz_convert(tz_used)
     except Exception:
-        # 如果转换失败，回退到 UTC
+        # 转换失败，回退到 UTC
         df = df.tz_convert("UTC")
         tz_used = ZoneInfo("UTC")
+        tz_used_name = "UTC"
 
-    # 4) 构造输出记录：dayN 为本地日序数，hourN 为本地小时 (0-23)
+    # 5) 构造输出记录：dayN 为本地日序数，hourN 为本地小时 (0-23)
     records = []
     for ts, row in df.iterrows():
-        # ts 已经带时区，直接以本地时间处理
-        ts_local = ts
+        ts_local = ts  # 已经带时区信息
         dayN = int(ts_local.dayofyear)
-        hourN = int(ts_local.hour)  # 0-23
+        hourN = int(ts_local.hour)
 
         # 提取需要的字段，兜底为 0
         dni  = fnum(row.get("dni"))
@@ -74,6 +84,6 @@ def tmy(lat: float, lon: float):
 
     return {
         "meta": jsonable_encoder(meta),
-        "tz": str(tz_used),
+        "tz": str(tz_used_name),
         "records": records
     }

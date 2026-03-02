@@ -51,11 +51,17 @@ def fnum(x: Any, default: float = 0.0) -> float:
     except (TypeError, ValueError):
         return default
 
-def tmy(lat: float, lon: float, tzName: Optional[str] = None, gmtOffset: Optional[float] = None) -> Dict[str, Any]:
+def tmy(
+    lat: float,
+    lon: float,
+    tzName: Optional[str] = None,
+    gmtOffset: Optional[float] = None,
+    rotate_last_n_day1: int = 0  # 新增：从 day1 的结尾取 N 条挪到开头
+) -> Dict[str, Any]:
     """
     获取 PVGIS TMY 数据并做时区、本地化处理，返回统一的字典结构。
-    如果发生错误，返回：
-      {"error": "TMY fetch failed: <原因>", "tz": "UTC", "records": [], "meta": None}
+    额外参数：
+      - rotate_last_n_day1: 如果大于 0，将 day1 的最后 N 条记录挪到 CSV 开头，并重新计算 hourN。
     """
     # 0) 获取 PVGIS TMY 数据
     try:
@@ -68,7 +74,7 @@ def tmy(lat: float, lon: float, tzName: Optional[str] = None, gmtOffset: Optiona
             "meta": None
         }
 
-    # 1) 将时间轴本地化为 UTC（PVGIS 输出通常为 UTC 时序）
+    # 1) 将时间轴本地化为 UTC
     if df.index.tz is None:
         df = df.tz_localize("UTC")
 
@@ -85,18 +91,27 @@ def tmy(lat: float, lon: float, tzName: Optional[str] = None, gmtOffset: Optiona
     try:
         df = df.tz_convert(tz_used)
     except Exception:
-        # 如果转换失败，回退到 UTC
         df = df.tz_convert("UTC")
         tz_used = ZoneInfo("UTC")
         tz_used_name = "UTC"
 
     # 4) 逐条记录构建输出
     records = []
-    for ts, row in df.iterrows():
-        ts_local = ts  # 已经带时区信息，表示本地时间
+    prev_dayN = None
+    hour_counter = 0
 
+    for ts, row in df.iterrows():
+        ts_local = ts
         dayN = int(ts_local.dayofyear)
-        hourN = int(ts_local.hour)
+
+        if dayN != prev_dayN:
+            hour_counter = 1
+            prev_dayN = dayN
+        else:
+            hour_counter += 1
+
+        # 初始的 hourN
+        hourN = int(hour_counter)
 
         dni  = fnum(row.get("dni"))
         dhi  = fnum(row.get("dhi"))
@@ -115,32 +130,39 @@ def tmy(lat: float, lon: float, tzName: Optional[str] = None, gmtOffset: Optiona
             "vwind": vwind
         })
 
+    # 旋转逻辑：将 day1 的最后 N 条挪到开头
+    if rotate_last_n_day1 and rotate_last_n_day1 > 0:
+        # 找到 day1 的记录范围
+        m = 0
+        for idx, rec in enumerate(records):
+            if rec["dayN"] != 1:
+                m = idx
+                break
+        if m == 0:
+            m = len(records)  # 整个数据都在 day1 的情况
+        n = min(rotate_last_n_day1, m)
+        if n > 0:
+            lastN = records[m - n : m]
+            firstPart = records[: m - n]
+            rotated = lastN + firstPart + records[m:]
+            records = rotated
+
+            # 重新按日重新分配 hourN
+            new_records = []
+            current_day = None
+            counter = 0
+            for r in records:
+                if r["dayN"] != current_day:
+                    current_day = r["dayN"]
+                    counter = 1
+                else:
+                    counter += 1
+                r["hourN"] = int(counter)
+                new_records.append(r)
+            records = new_records
+
     return {
         "meta": jsonable_encoder(meta),
         "tz": str(tz_used_name),
         "records": records
     }
-
-# 健康检查端点（可选，便于运维）
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-# 脚本中的核心路由：暴露 /tmy
-@app.get("/tmy")
-def tmy_route(lat: float, lon: float, tzName: Optional[str] = None, gmtOffset: Optional[float] = None):
-    """
-    /tmy?lat=...&lon=...&tzName=...&gmtOffset=...
-    返回 PVGIS TMY 数据，遇到错误时返回 404 与错误信息。
-    """
-    res = tmy(lat, lon, tzName, gmtOffset)
-    if isinstance(res, dict) and res.get("error"):
-        # 将后端错误以 404 HTTPException 返回给前端，便于定位
-        raise HTTPException(status_code=404, detail=res["error"])
-    return res
-
-# 启动入口（本地测试用）
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    import uvicorn
-    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=True)

@@ -30,7 +30,7 @@ def fnum(x) -> float:
     except Exception:
         return 0.0
 
-def tmy(lat: float, lon: float):
+def tmy(lat: float, lon: float, hour_shift: int = 9):
     # 1) 获取 PVGIS TMY 数据
     df, meta = pvlib.iotools.get_pvgis_tmy(lat, lon, map_variables=True)
 
@@ -41,7 +41,6 @@ def tmy(lat: float, lon: float):
     # 3) 根据坐标判定时区
     tz_name = _tf.timezone_at(lng=lon, lat=lat)
     if tz_name is None:
-        # 无法定位时区，回退到 UTC
         tz_used = ZoneInfo("UTC")
         tz_used_name = "UTC"
     else:
@@ -52,19 +51,23 @@ def tmy(lat: float, lon: float):
     try:
         df = df.tz_convert(tz_used)
     except Exception:
-        # 转换失败，回退到 UTC
         df = df.tz_convert("UTC")
         tz_used = ZoneInfo("UTC")
         tz_used_name = "UTC"
 
-    # 5) 构造输出记录：dayN 为本地日序数，hourN 为本地小时 (0-23)
+    # 5) 将时间整体向后移动 hour_shift 小时
+    if hour_shift:
+        df.index = df.index + pd.Timedelta(hours=hour_shift)
+
+    hour_shift = 9
+    
+    # 6) 构造输出记录：以移动后的本地时间为基准
     records = []
     for ts, row in df.iterrows():
-        ts_local = ts  # 已经带时区信息
+        ts_local = ts  # 已经带时区信息，表示移动后的本地时间
         dayN = int(ts_local.dayofyear)
         hourN = int(ts_local.hour)
 
-        # 提取需要的字段，兜底为 0
         dni  = fnum(row.get("dni"))
         dhi  = fnum(row.get("dhi"))
         ghi  = fnum(row.get("ghi"))

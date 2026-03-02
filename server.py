@@ -3,42 +3,37 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.encoders import jsonable_encoder
 
 import pvlib
-import pandas as pd
-from timezonefinder import TimezoneFinder
 from zoneinfo import ZoneInfo
+from timezonefinder import TimezoneFinder
+import pandas as pd  # 如还使用到 Timedelta，请保留导入
 
-_tf = TimezoneFinder()
-
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-_tf = TimezoneFinder()
-
-# -------------- 方案 A：DST-aware 的 Sydney 时区 (Australia/Sydney) --------------
-def fnum(x) -> float:
-    # 将 None/NaN 转为 0，避免 JSON 出 NaN
-    if x is None or (isinstance(x, float) and pd.isna(x)):
-        return 0.0
+_tf = TimezoneFinder()  # 全局实例，提升性能
+def fnum(x, default=0.0):
     try:
+        if x is None:
+            return default
         return float(x)
-    except Exception:
-        return 0.0
+    except (TypeError, ValueError):
+        return default
 
-def tmy(lat: float, lon: float, hour_shift: int = 9):
-    # 1) 获取 PVGIS TMY 数据
-    df, meta = pvlib.iotools.get_pvgis_tmy(lat, lon, map_variables=True)
+def tmy(lat: float, lon: float):
+    # 0) 获取 PVGIS TMY 数据
+    try:
+        df, meta = pvlib.iotools.get_pvgis_tmy(lat, lon, map_variables=True)
+    except Exception as e:
+        # 这里保留一个简单的错误返回，避免直接崩溃
+        return {
+            "error": f"TMY fetch failed: {str(e)}",
+            "tz": "UTC",
+            "records": [],
+            "meta": None
+        }
 
-    # 2) 将时间轴本地化为 UTC（PVGIS 输出通常为 UTC 时序，若 df.index 已有时区则跳过）
+    # 1) 将时间轴本地化为 UTC（PVGIS 输出通常为 UTC 时序，若 df.index 已有时区则跳过）
     if df.index.tz is None:
         df = df.tz_localize("UTC")
 
-    # 3) 根据坐标判定时区
+    # 2) 根据坐标判定时区
     tz_name = _tf.timezone_at(lng=lon, lat=lat)
     if tz_name is None:
         tz_used = ZoneInfo("UTC")
@@ -47,7 +42,7 @@ def tmy(lat: float, lon: float, hour_shift: int = 9):
         tz_used = ZoneInfo(tz_name)
         tz_used_name = tz_name
 
-    # 4) 将时间转换到确定的本地时区
+    # 3) 将时间转换到确定的本地时区
     try:
         df = df.tz_convert(tz_used)
     except Exception:
@@ -55,16 +50,10 @@ def tmy(lat: float, lon: float, hour_shift: int = 9):
         tz_used = ZoneInfo("UTC")
         tz_used_name = "UTC"
 
-    # 5) 将时间整体向后移动 hour_shift 小时
-    if hour_shift:
-        df.index = df.index + pd.Timedelta(hours=hour_shift)
-
-    hour_shift = 9
-    
-    # 6) 构造输出记录：以移动后的本地时间为基准
+    # 4) 不进行任何额外的小时偏移，直接使用转换后的本地时间
     records = []
     for ts, row in df.iterrows():
-        ts_local = ts  # 已经带时区信息，表示移动后的本地时间
+        ts_local = ts  # 已经带时区信息，表示本地时间
         dayN = int(ts_local.dayofyear)
         hourN = int(ts_local.hour)
 

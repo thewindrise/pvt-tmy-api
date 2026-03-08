@@ -166,3 +166,80 @@ def tmy(
         "tz": str(tz_used_name),
         "records": records
     }
+
+
+# ============================================================================
+# FastAPI Routes - 这些是缺失的关键部分！
+# ============================================================================
+
+@app.get("/health")
+async def health_check():
+    """
+    健康检查端点 - 检查服务器是否运行
+    """
+    return {"status": "ok", "message": "TMY API is running"}
+
+
+@app.get("/tmy")
+async def get_tmy(
+    lat: float,
+    lon: float,
+    tz: Optional[str] = None,
+    gmtOffset: Optional[float] = None,
+    rotate_last_n_day1: int = 0
+):
+    """
+    获取 TMY 数据的 API 端点
+    
+    参数:
+    - lat: 纬度
+    - lon: 经度
+    - tz: 时区名称（可选）
+    - gmtOffset: GMT 偏移（可选）
+    - rotate_last_n_day1: 旋转参数（可选）
+    
+    返回:
+    - JSON 格式的 TMY 数据，包含 meta、tz、records
+    """
+    result = tmy(lat, lon, tz, gmtOffset, rotate_last_n_day1)
+    
+    # 如果出错，返回 404
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    
+    return result
+
+
+@app.post("/tmy")
+async def post_tmy(
+    lat: float,
+    lon: float,
+    tz: Optional[str] = None,
+    gmtOffset: Optional[float] = None,
+    rotate_last_n_day1: int = 0
+):
+    """
+    获取 TMY 数据的 API 端点（POST 方法）
+    
+    参数:
+    - lat: 纬度
+    - lon: 经度
+    - tz: 时区名称（可选）
+    - gmtOffset: GMT 偏移（可选）
+    - rotate_last_n_day1: 旋转参数（可选）
+    
+    返回:
+    - JSON 格式的 TMY 数据，包含 meta、tz、records
+    """
+    result = tmy(lat, lon, tz, gmtOffset, rotate_last_n_day1)
+    
+    # 如果出错，返回 404
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    
+    return result
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
